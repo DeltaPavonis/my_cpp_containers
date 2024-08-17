@@ -508,9 +508,15 @@ struct FixedCapacityVector {
 
 private:
     union {
+        /* `elements` stores the at-most `Capacity` elements in this `FixedCapacityVector` on the
+        stack. It is kept in an union because doing so prevents it from being automatically
+        initialized, which in turn allows the element type `T` to be non-default-constructible. */
         T elements[Capacity];
     };
+    /* `current_size` = The current number of elements stored within this `FixedCapacityVector`. */
     size_t current_size = 0;
+    /* `allocator` = An instance of type `Allocator`, used to allocate/construct/destroy/deallocate
+    elements. */
     Allocator allocator;
 
     /* Throws `std::out_of_range` if `index` is out of bounds for this `FixedCapacityVector`. */
