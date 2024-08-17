@@ -1,4 +1,4 @@
-# cpp_containers
+# my_cpp_containers
 
 This repository contains C++20 implementations of various custom containers I've used in my personal projects (or that I've just found fun to implement). Each container is defined in its own corresponding header file, listed below:
 
