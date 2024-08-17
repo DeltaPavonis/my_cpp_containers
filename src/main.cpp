@@ -1,7 +1,9 @@
+#include "vector_variations/stack_assisted_vector.h"
 #include "vector_variations/fixed_capacity_vector.h"
 #include "vector_variations/bounds_checked_vector.h"
 #include <iostream>
 #include <format>
+#include <algorithm>
 
 using namespace std::literals;
 
@@ -76,6 +78,33 @@ struct NonDefaultConstructibleClass {
     }
 };
 
+template <>
+struct std::formatter<NonDefaultConstructibleClass> : public std::formatter<std::string> {
+    auto format(const NonDefaultConstructibleClass &i, std::format_context &format_context) const {
+        if (i.field) {
+            return std::format_to(format_context.out(), "{}", *(i.field));
+        } else {
+            return std::format_to(format_context.out(), "(nullptr)");
+        }
+    }
+};
+
+template <>
+struct std::formatter<std::vector<NonDefaultConstructibleClass>> : public std::formatter<std::string> {
+    auto format(const std::vector<NonDefaultConstructibleClass> &v, std::format_context &format_context) const {
+        auto output = format_context.out();
+        std::format_to(output, "{{");
+        if (!v.empty()) {
+            std::format_to(output, "{}", v.front());
+            for (size_t i = 1; i < v.size(); ++i) {
+                std::format_to(output, ", {}", v[i]);
+            }
+        }
+        std::format_to(output, "}}");
+        return output;
+    }
+};
+
 void test_bcv() {
     BoundsCheckedVector<int> v{1, 2, 3};
     BoundsCheckedVector<int> v2(v.begin(), v.end());  // Most recent construction/initialization
@@ -103,6 +132,64 @@ consteval auto test_fcv_constant_evaluation() {
     return sum;
 }
 
+void sav_test_insert_uses_move() {
+    StackAssistedVector<NonDefaultConstructibleClass, 4> sav;
+    std::cout << "--- 5 push_back's\n";
+    for (int i = 0; i < 100; ++i) {
+        sav.push_back(i);
+    }
+    std::cout << std::format("sav: {}\n", sav);
+
+    std::cout << "--- 1 insert\n";
+    sav.insert(sav.begin() + 75, 100);
+    std::cout << std::format("sav: {}\n", sav);
+
+    std::cout << "--- insert at end\n";
+    sav.insert(sav.end(), 101);
+    std::cout << std::format("sav: {}\n", sav);
+}
+
+void sav_test_move_constructor() {
+    /* First test move-constructing from a SAV who has moved to the heap */
+    {
+        StackAssistedVector<NonDefaultConstructibleClass, 5> sav;
+        for (int i = 0; i < 10; ++i) {
+            sav.push_back(i);
+        }
+
+        StackAssistedVector<NonDefaultConstructibleClass, 5> sav2(std::move(sav));
+        std::cout << std::format("{}\n", sav2);
+    }
+
+    /* Then, test move-constructing from a SAV that is still on the stack */
+    {
+        StackAssistedVector<NonDefaultConstructibleClass, 5> sav;
+        for (int i = 0; i < 5; ++i) {
+            sav.push_back(i);
+        }
+
+        StackAssistedVector<NonDefaultConstructibleClass, 5> sav2(std::move(sav));
+        std::cout << std::format("{}\n", sav2);
+    }
+}
+
+void sav_test_iterator_constructor() {
+    std::vector<int> nums{1, 2, 3, 4, 5, 6};
+    StackAssistedVector<NonDefaultConstructibleClass, 5> sav(nums.begin(), nums.end());
+    std::cout << std::format("Iterators constructor: {}\n", sav);
+}
+
+void sav_test_initializer_list_constructor() {
+    StackAssistedVector<NonDefaultConstructibleClass, 5> sav = {2, 1, 3, 4, 5, 6};
+    std::cout << std::format("Initializer list: {}\n", sav);
+}
+
+void sav_test_copy_constructor() {
+    StackAssistedVector<NonDefaultConstructibleClass, 5> sav = {2, 1, 3, 4, 5, 6};
+    StackAssistedVector<NonDefaultConstructibleClass, 5> sav2(sav);
+    std::cout << std::format("Copy constructor: {}\n", sav2);
+}
+
 bool vectors_equal(auto &sav, auto &vec) {
     return (sav.size() == vec.size()) && 
             std::equal(
@@ -112,6 +199,138 @@ bool vectors_equal(auto &sav, auto &vec) {
                            (*(a.field) == *(b.field));
                 }
             );
+}
+
+template <size_t StackCapacity>
+void sav_test_erase_with_capacity(bool exceed_stack_capacity) {
+    StackAssistedVector<NonDefaultConstructibleClass, StackCapacity> initial_sav;
+    for (size_t i = 0; i < (exceed_stack_capacity ? 3 * StackCapacity : StackCapacity); ++i) {
+        initial_sav.push_back(i);
+    }
+
+    /* Test erasing a single element */
+    for (size_t i = 0; i < initial_sav.size(); ++i) {
+        std::vector<NonDefaultConstructibleClass> vec(initial_sav.begin(), initial_sav.end());
+        auto vec_it = vec.erase(vec.begin() + i);
+
+        StackAssistedVector<NonDefaultConstructibleClass, StackCapacity> curr_sav(initial_sav);
+        auto curr_sav_it = curr_sav.erase(curr_sav.begin() + i);
+
+        expect_equal(vectors_equal(curr_sav, vec), true);
+        expect_equal(vec_it - vec.begin(), curr_sav_it - curr_sav.begin());
+    }
+
+    /* Test erasing a range of iterators */
+    for (size_t l = 0; l < initial_sav.size(); ++l) {
+        for (size_t r = l; r <= initial_sav.size(); ++r) {  /* Second iterator can be `end()` */
+            std::vector<NonDefaultConstructibleClass> vec(initial_sav.begin(), initial_sav.end());
+            auto vec_it = vec.erase(vec.begin() + l, vec.begin() + r);
+
+            StackAssistedVector<NonDefaultConstructibleClass, StackCapacity> curr_sav(initial_sav);
+            auto curr_sav_it = curr_sav.erase(curr_sav.begin() + l, curr_sav.begin() + r);
+
+            expect_equal(vectors_equal(curr_sav, vec), true);
+            expect_equal(vec_it - vec.begin(), curr_sav_it - curr_sav.begin());
+        }
+    }
+}
+
+void sav_test_erase() {
+    for (auto b : {false, true}) {
+        sav_test_erase_with_capacity<1>(b);
+        sav_test_erase_with_capacity<2>(b);
+        sav_test_erase_with_capacity<5>(b);
+        sav_test_erase_with_capacity<10>(b);
+        sav_test_erase_with_capacity<50>(b);
+        sav_test_erase_with_capacity<100>(b);
+    }
+}
+
+template <size_t StackCapacity>
+void sav_test_insert_with_capacity(bool exceed_stack_capacity) {
+    StackAssistedVector<NonDefaultConstructibleClass, StackCapacity> initial_sav;
+    for (size_t i = 0; i < (exceed_stack_capacity ? 3 * StackCapacity : StackCapacity); ++i) {
+        initial_sav.push_back(i);
+    }
+
+    /* Test inserting a single element */
+    for (size_t i = 0; i <= initial_sav.size(); ++i) {  /* can pass end() to `insert` */
+        std::vector<NonDefaultConstructibleClass> vec(initial_sav.begin(), initial_sav.end());
+        auto vec_it = vec.insert(vec.begin() + i, -1);
+
+        StackAssistedVector<NonDefaultConstructibleClass, StackCapacity> curr_sav(initial_sav);
+        auto curr_sav_it = curr_sav.insert(curr_sav.begin() + i, -1);
+
+        expect_equal(vectors_equal(curr_sav, vec), true);
+        expect_equal(vec_it - vec.begin(), curr_sav_it - curr_sav.begin());
+    }
+
+    /* Test inserting `n` copies of a single element */
+    for (auto n : std::vector<size_t>{0, 1, 2, 5, StackCapacity, StackCapacity + 1}) {
+        for (size_t i = 0; i <= initial_sav.size(); ++i) {
+            std::vector<NonDefaultConstructibleClass> vec(initial_sav.begin(), initial_sav.end());
+            auto vec_it = vec.insert(vec.begin() + i, n, -1);
+
+            StackAssistedVector<NonDefaultConstructibleClass, StackCapacity> curr_sav(initial_sav);
+            auto curr_sav_it = curr_sav.insert(curr_sav.begin() + i, n, -1);
+
+            expect_equal(vectors_equal(curr_sav, vec), true);
+            expect_equal(vec_it - vec.begin(), curr_sav_it - curr_sav.begin());
+        }
+    }
+
+    /* Test inserting a range of iterators */
+    for (auto n : {0, 1, 2, 5}) {
+        std::vector<int> range_to_be_inserted(n);
+        for (int i = 0; i < n; ++i) {
+            range_to_be_inserted[i] = -i;
+        }
+
+        /* Test inserting a range of iterators */
+        for (size_t l = 0; l < range_to_be_inserted.size(); ++l) {
+            for (size_t r = l; r <= range_to_be_inserted.size(); ++r) {  /* Second iterator can be `end()` */
+                for (size_t i = 0; i <= initial_sav.size(); ++i) {
+                    /* Try inserting `range_to_be_inserted[l..r)` before `sav.begin() + i` */
+                    std::vector<NonDefaultConstructibleClass> vec(initial_sav.begin(), initial_sav.end());
+                    auto vec_it = vec.insert(
+                        vec.begin() + i,
+                        range_to_be_inserted.begin() + l, range_to_be_inserted.begin() + r
+                    );
+
+                    StackAssistedVector<NonDefaultConstructibleClass, StackCapacity> curr_sav(initial_sav);
+                    auto curr_sav_it = curr_sav.insert(
+                        curr_sav.begin() + i,
+                        range_to_be_inserted.begin() + l, range_to_be_inserted.begin() + r
+                    );
+
+                    expect_equal(vectors_equal(curr_sav, vec), true);
+                    expect_equal(vec_it - vec.begin(), curr_sav_it - curr_sav.begin());
+                }
+            }
+        }
+    }
+}
+
+void sav_test_insert() {
+    for (auto b : {false, true}) {
+        sav_test_insert_with_capacity<1>(b);
+        sav_test_insert_with_capacity<2>(b);
+        sav_test_insert_with_capacity<5>(b);
+        sav_test_insert_with_capacity<10>(b);
+        sav_test_insert_with_capacity<50>(b);
+        sav_test_insert_with_capacity<100>(b);
+    }
+}
+
+void test_sav() {
+    std::cout << "Testing SAV... " << std::flush;
+    sav_test_insert();
+    sav_test_erase();
+    sav_test_move_constructor();
+    sav_test_initializer_list_constructor();
+    sav_test_iterator_constructor();
+    sav_test_copy_constructor();
+    std::cout << "Success" << std::endl;
 }
 
 template <size_t Capacity>
@@ -195,7 +414,7 @@ void fcv_test_insert() {
 
 template <size_t Capacity>
 void fcv_test_erase_with_capacity() {
-    FixedCapacityVector<NonDefaultConstructibleClass, Capacity> initial_fcv;
+    StackAssistedVector<NonDefaultConstructibleClass, Capacity> initial_fcv;
     for (size_t i = 0; i < Capacity / 2; ++i) {
         initial_fcv.push_back(i);
     }
@@ -248,6 +467,7 @@ void test_fcv() {
 int main()
 {
     test_fcv();
+    test_sav();
     expect_equal(test_fcv_constant_evaluation(), 4950);
     test_bcv();  /* Will terminate the program if all goes well */
 
