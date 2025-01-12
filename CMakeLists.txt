@@ -37,3 +37,6 @@ set_target_properties(cpp_containers PROPERTIES CXX_EXTENSIONS OFF)
 
 # Use cpp_containers/include as an include directory for building the `cpp_containers` executable
 target_include_directories(cpp_containers PRIVATE ${CMAKE_SOURCE_DIR}/include)
+
+target_compile_options(cpp_containers PRIVATE -fsanitize=address)
+target_link_options(cpp_containers PRIVATE -fsanitize=address)

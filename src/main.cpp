@@ -1,9 +1,16 @@
 #include "vector_variations/stack_assisted_vector.h"
 #include "vector_variations/fixed_capacity_vector.h"
 #include "vector_variations/bounds_checked_vector.h"
+#include "hashing_containers/probing_hash_set.h"
+#include "hashing_containers/probing_hash_map.h"
 #include <iostream>
+#include <fstream>
 #include <format>
 #include <algorithm>
+#include <random>
+#include <unordered_set>
+#include <unordered_map>
+#include <format>
 
 using namespace std::literals;
 
@@ -464,8 +471,128 @@ void test_fcv() {
     std::cout << "Success" << std::endl;
 }
 
+struct S {
+    auto& operator=(const S&) {std::cout << "S copy assignment operator" << std::endl; return *this;}
+    auto& operator=(S&&) {std::cout << "S move assignment operator" << std::endl; return *this;}
+    S(const S&) {std::cout << "S copy constructor" << std::endl;}
+    S(S&&) {std::cout << "S move constructor" << std::endl;}
+    S() {std::cout << "S default constructor" << std::endl;}
+    ~S() {std::cout << "S destructor" << std::endl;}
+};
+
+template <typename T, typename Hasher>
+void expect_eq(const ProbingHashSet<T, Hasher> &H, const std::unordered_set<T, Hasher> &S) {
+    if (H.size() != S.size()) {
+        std::cout << "hashset sizes differ: mine is " << H.size() << ", theirs is " << S.size() << '\n';
+    }
+    for (auto i : S) {
+        expect_equal(H.find(i), true);
+    }
+}
+
+template <typename K, typename V, typename Hasher>
+void expect_eq(const ProbingHashMap<K, V, Hasher> &H, const std::unordered_map<K, V, Hasher> &M) {
+    expect_equal(H.size(), M.size());
+    for (auto [k, v] : M) {
+        expect_equal(H.contains(k), true);
+        auto val = H.get_value(k);
+        expect_equal(val.has_value(), true);
+        expect_equal(*val, v);
+    }
+}
+
+template <typename T>
+struct CollidingHasher {
+    uint64_t operator() (const T &value) const {
+        return 12;
+    }
+};
+
+void test_hashset() {
+    std::mt19937 generator{std::random_device{}()};
+    std::uniform_int_distribution op_dist(0, 2), num_dist(0, 0);
+
+    struct Op {
+        int type;
+        int value;
+    };
+
+    constexpr int NUM_OPERATIONS = 10000;
+    std::vector<Op> operations(NUM_OPERATIONS);
+    for (auto &[type, value] : operations) {
+        type = op_dist(generator);
+        value = num_dist(generator);
+    }
+
+    operations = {
+        {2, 0}, {0, 0},
+        {2, 0}, {0, 0},
+        {2, 0}, {0, 0}
+    };
+
+    std::unordered_set<double, CollidingHasher<double>> S;
+    ProbingHashSet<double, CollidingHasher<double>> H;
+    for (int op_num = 0; const auto &[type, value] : operations) {
+        std::cout << std::format("--- Operation {} {}\n", type, value);
+        switch(type) {
+            case 0:
+                S.insert(value);
+                H.insert(value);
+                break;
+            default:
+                S.erase(value);
+                H.erase(value);
+                break;
+        }
+
+        H.dump();
+
+        expect_eq(H, S);
+        ++op_num;
+    }
+}
+
+template <typename T, typename Hasher = std::hash<T>, typename Allocator = std::allocator<T>>
+struct TestVec {
+    T* ptr;
+    [[no_unique_address]] Hasher h;
+    [[no_unique_address]] Allocator a;
+};
+
+struct EmptyType {};
+
+template <typename T1, typename T2>
+struct CP {
+    [[no_unique_address]] T1 first;
+    [[no_unique_address]] T2 second;
+};
+
 int main()
 {
+    sizeof(std::pair<EmptyType, double>);
+    sizeof(CP<EmptyType, EmptyType>);
+
+    sizeof(TestVec<int>);
+
+    test_hashset();
+
+    ProbingHashMap<std::string, int> H;
+    H.assign_or_insert("hello!", 1);
+    H.assign_or_insert("hi!", 2);
+    expect_equal(H.get_value("hello!").value_or(-1), 1);
+    expect_equal(H.get_value("hi!").value_or(-1), 2);
+    expect_equal(H.size(), (size_t) 2);
+    H.erase("hi!");
+    expect_equal(H.get_value("hi!").has_value(), false);
+
+    // using Allocator = std::allocator<S>;
+    // using AllocatorTraits = std::allocator_traits<Allocator>;
+    // auto allocator = Allocator{};
+    
+    // S *array = AllocatorTraits::allocate(allocator, 5);
+    // AllocatorTraits::construct(allocator, array + 1);
+    return 0;
+
     test_fcv();
     test_sav();
     expect_equal(test_fcv_constant_evaluation(), 4950);
